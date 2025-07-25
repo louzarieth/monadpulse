@@ -1,0 +1,414 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Bell, Check, AlertCircle, X } from 'lucide-react';
+import { useClickOutside } from '../hooks/useClickOutside';
+import { CalendarEvent } from '../types/calendar';
+import notificationService, { UserPreferences } from '../services/notificationService';
+
+type NotificationPermission = 'granted' | 'denied' | 'default';
+
+interface NotificationStatus {
+  text: string;
+  color: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+const NOTIFICATION_STATUS: Record<NotificationPermission, NotificationStatus> = {
+  'granted': {
+    text: 'Notifications are enabled',
+    color: 'text-green-400',
+    icon: Check
+  },
+  'denied': {
+    text: 'Notifications are blocked. Please enable them in your browser settings.',
+    color: 'text-red-400',
+    icon: AlertCircle
+  },
+  'default': {
+    text: 'Click the toggle to enable browser notifications',
+    color: 'text-yellow-400',
+    icon: Bell
+  }
+};
+
+interface FormData extends Omit<UserPreferences, 'notify1hBefore' | 'notify10mBefore'> {
+  notificationPreferences: {
+    notifyEmail: boolean;
+    notifyBrowser: boolean;
+    email1hBefore: boolean;
+    email10mBefore: boolean;
+    browser1hBefore: boolean;
+    browser10mBefore: boolean;
+  };
+  eventTypePreferences: Record<string, boolean>;
+}
+
+interface SettingsModalProps {
+  onClose: () => void;
+  events: CalendarEvent[];
+  isFirstTime?: boolean;
+}
+
+const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, events }) => {
+  // State management
+  const [isLoading, setIsLoading] = useState(true);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
+  
+  const [formData, setFormData] = useState<FormData>(() => ({
+    email: '',
+    notifyEmail: false,
+    notifyBrowser: false,
+    notifyAllEvents: true,
+    email1hBefore: false,
+    email10mBefore: false,
+    browser1hBefore: false,
+    browser10mBefore: false,
+    notificationPreferences: {
+      notifyEmail: false,
+      notifyBrowser: false,
+      email1hBefore: false,
+      email10mBefore: false,
+      browser1hBefore: false,
+      browser10mBefore: false,
+    },
+    eventTypePreferences: {}
+  }));
+
+  // Handle save all preferences
+  const handleSave = useCallback(async () => {
+    try {
+      setIsSaving(true);
+      // Convert form data to match UserPreferences interface
+      const prefs: Partial<UserPreferences> = {
+        email: formData.email,
+        notifyEmail: formData.notificationPreferences.notifyEmail,
+        notifyBrowser: formData.notificationPreferences.notifyBrowser,
+        notifyAllEvents: formData.notifyAllEvents,
+        email1hBefore: formData.notificationPreferences.email1hBefore,
+        email10mBefore: formData.notificationPreferences.email10mBefore,
+        browser1hBefore: formData.notificationPreferences.browser1hBefore,
+        browser10mBefore: formData.notificationPreferences.browser10mBefore,
+      };
+      
+      await notificationService.updatePreferences(prefs);
+      setHasUnsavedChanges(false);
+      onClose();
+    } catch (error) {
+      console.error('Error saving preferences:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [formData, onClose]);
+
+  // Handle preference changes
+  const handlePreferenceChange = useCallback((key: string, value: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      [key]: value,
+      notificationPreferences: {
+        ...prev.notificationPreferences,
+        [key]: value
+      }
+    }));
+    setHasUnsavedChanges(true);
+  }, []);
+
+  // Toggle all event types
+  const toggleAllEventTypes = useCallback((enable: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      eventTypePreferences: Object.keys(prev.eventTypePreferences).reduce((acc, key) => ({
+        ...acc,
+        [key]: enable
+      }), {})
+    }));
+    setHasUnsavedChanges(true);
+  }, []);
+
+  // Handle preference changes
+  const handlePreferenceChange = useCallback((key: keyof UserPreferences | keyof FormData['notificationPreferences'], value: boolean | string) => {
+    if (key === 'email') {
+      const emailValue = String(value);
+      setFormData(prev => ({ ...prev, email: emailValue }));
+      setHasUnsavedChanges(true);
+      return;
+    }
+
+    if (['notifyEmail', 'notifyBrowser', 'email1hBefore', 'email10mBefore', 'browser1hBefore', 'browser10mBefore'].includes(key)) {
+      const newValue = Boolean(value);
+      
+      setFormData(prev => ({
+        ...prev,
+        notificationPreferences: {
+          ...prev.notificationPreferences,
+          [key]: newValue,
+          ...(key === 'notifyEmail' && !newValue ? { email1hBefore: false, email10mBefore: false } : {})
+        }
+      }));
+
+      setHasUnsavedChanges(true);
+      return;
+    }
+
+    const newValue = Boolean(value);
+    setFormData(prev => ({ ...prev, [key]: newValue }));
+    setHasUnsavedChanges(true);
+  }, [setFormData, setHasUnsavedChanges]);
+
+  // Toggle all event types
+  const toggleAllEventTypes = (enable: boolean) => {
+    setFormData(prev => {
+      const newPrefs = { ...prev.eventTypePreferences };
+      Object.keys(newPrefs).forEach(key => {
+        newPrefs[key] = enable;
+      });
+      return {
+        ...prev,
+        eventTypePreferences: newPrefs
+      };
+    });
+    setHasUnsavedChanges(true);
+  };
+
+  // Toggle event type preference
+  const toggleEventType = (eventType: string) => {
+    setFormData(prev => ({
+      ...prev,
+      eventTypePreferences: {
+        ...prev.eventTypePreferences,
+        [eventType]: !prev.eventTypePreferences[eventType]
+      }
+    }));
+    setHasUnsavedChanges(true);
+  };
+
+  // Handle notification toggle
+  const handleNotificationToggle = useCallback(async (enabled: boolean) => {
+    try {
+      if (enabled) {
+        const permission = await notificationService.requestNotificationPermission();
+        setNotificationPermission(permission as NotificationPermission);
+        
+        if (permission === 'granted') {
+          setFormData(prev => ({
+            ...prev,
+            notificationPreferences: {
+              ...prev.notificationPreferences,
+              notifyBrowser: true
+            }
+          }));
+        } else {
+          setFormData(prev => ({
+            ...prev,
+            notificationPreferences: {
+              ...prev.notificationPreferences,
+              notifyBrowser: false
+            }
+          }));
+        }
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          notificationPreferences: {
+            ...prev.notificationPreferences,
+            notifyBrowser: false
+          }
+        }));
+      }
+      setHasUnsavedChanges(true);
+    } catch (error) {
+      console.error('Error toggling notifications:', error);
+    }
+  }, [setNotificationPermission, setFormData]);
+
+  // Filter event types based on search and track selection state
+  const { filteredEventTypes, allSelected, someSelected } = useMemo(() => {
+    const filtered = Object.entries(formData.eventTypePreferences).filter(([type]) => 
+      type.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+    
+    const allSelected = filtered.every(([_, isEnabled]) => isEnabled);
+    const someSelected = filtered.some(([_, isEnabled]) => isEnabled) && !allSelected;
+    
+    return { filteredEventTypes: filtered, allSelected, someSelected };
+  }, [formData.eventTypePreferences, searchTerm]);
+
+  // Handle click outside to close modal
+  useClickOutside(modalRef, () => {
+    if (hasUnsavedChanges) {
+      if (window.confirm('You have unsaved changes. Are you sure you want to close?')) {
+        onClose();
+      }
+    } else {
+      onClose();
+    }
+  });
+
+  // Show loading state
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className="bg-[#1a1a2e] p-6 rounded-lg">
+          <p className="text-white">Loading settings...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Load user preferences and event types
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        setIsLoading(true);
+        
+        // 1. Load user preferences first
+        const prefs = await notificationService.getPreferences();
+        
+        // 2. Get unique event types from events
+        const types = notificationService.getUniqueEventTypes(events);
+        
+        // 3. Get user's event preferences with available event types
+        const eventPrefs = await notificationService.getEventPreferences(types);
+        
+        // 4. Create a map of event types to their enabled state
+        const eventTypesMap = eventPrefs.reduce((acc: Record<string, boolean>, pref: EventPreference) => {
+          acc[pref.event_type] = pref.is_enabled;
+          return acc;
+        }, {});
+        
+        // 5. Set all the form data at once
+        setFormData({
+          email: prefs.email || '',
+          notifyEmail: prefs.notifyEmail,
+          notifyBrowser: prefs.notifyBrowser,
+          notifyAllEvents: prefs.notifyAllEvents,
+          email1hBefore: prefs.email1hBefore,
+          email10mBefore: prefs.email10mBefore,
+          browser1hBefore: prefs.browser1hBefore,
+          browser10mBefore: prefs.browser10mBefore,
+          notificationPreferences: {
+            notifyEmail: prefs.notifyEmail,
+            notifyBrowser: prefs.notifyBrowser,
+            email1hBefore: prefs.email1hBefore,
+            email10mBefore: prefs.email10mBefore,
+            browser1hBefore: prefs.browser1hBefore,
+            browser10mBefore: prefs.browser10mBefore
+          },
+          eventTypePreferences: eventTypesMap
+        });
+        
+        setEventTypes(eventTypesMap);
+        
+        // 6. Check notification permission
+        setNotificationPermission(Notification.permission as NotificationPermission);
+        
+        if (prefs.notifyBrowser && Notification.permission === 'default') {
+          const permission = await notificationService.requestNotificationPermission();
+          setNotificationPermission(permission as NotificationPermission);
+        }
+      } catch (error) {
+        console.error('Error loading notification settings:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    loadSettings();
+  }, [events]);
+
+  // Effect to check notification permission on mount and when it changes
+  useEffect(() => {
+    const checkNotificationPermission = () => {
+      setNotificationPermission(Notification.permission as NotificationPermission);
+    };
+
+    checkNotificationPermission();
+
+    const handlePermissionChange = () => {
+      checkNotificationPermission();
+    };
+
+    if ('permissions' in navigator) {
+      navigator.permissions.query({ name: 'notifications' as PermissionName })
+        .then((permissionStatus) => {
+          permissionStatus.addEventListener('change', handlePermissionChange);
+          return () => {
+            permissionStatus.removeEventListener('change', handlePermissionChange);
+          };
+        });
+    }
+
+    return () => {
+      if ('permissions' in navigator) {
+        navigator.permissions.query({ name: 'notifications' as PermissionName })
+          .then((permissionStatus) => {
+            permissionStatus.removeEventListener('change', handlePermissionChange);
+          });
+      }
+    };
+          </button>
+          <button
+            onClick={async () => {
+              if (!hasUnsavedChanges) {
+                onClose();
+                return;
+              }
+
+              try {
+                setIsSaving(true);
+                await handleSave();
+                onClose();
+              } catch (error) {
+                console.error('Error saving preferences:', error);
+              } finally {
+                setIsSaving(false);
+              }
+            }}
+            className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors duration-200"
+            disabled={isSaving}
+          >
+            {isSaving ? 'Saving...' : 'Save Changes'}
+          </button>
+                    Object.entries(formData.eventTypePreferences).map(([type, enabled]) =>
+                      notificationService.updateEventPreference(type, enabled)
+                    )
+                  );
+                  
+                  setHasUnsavedChanges(false);
+                  onClose();
+                } catch (error) {
+                  console.error('Error saving preferences:', error);
+                  alert('Failed to save preferences. Please try again.');
+                } finally {
+                  setIsSaving(false);
+                }
+              }}
+              disabled={isSaving}
+              className={`flex-1 py-3 ${
+                isSaving 
+                  ? 'bg-[#886FFF]/70 cursor-not-allowed' 
+                  : 'bg-[#886FFF] hover:bg-[#ae7aff]'
+              } rounded-lg font-medium transition-colors duration-200 flex items-center justify-center gap-2`}
+            >
+              {isSaving ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                  Saving...
+                </>
+              ) : hasUnsavedChanges ? (
+                'Save Changes'
+              ) : (
+                'Done'
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default SettingsModal;
