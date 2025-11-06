@@ -1,6 +1,6 @@
 import { CalendarEvent } from '../types/calendar';
 
-const GOOGLE_API_KEY = 'AIzaSyCEpcJdO5FPDoNT49qaaqVXq9INsphQSQE'; // Replace with your actual API key
+const GOOGLE_API_KEY = 'xxxxxxxxxxxxxxxx'; // Replace with your actual API key
 const CALENDAR_ID = 'df80381b3317c2ce323ec7376a93dd57fbaa8e733452e576b56ace1656198c31@group.calendar.google.com';
 
 export const fetchGoogleCalendarEvents = async (date: Date): Promise<CalendarEvent[]> => {
